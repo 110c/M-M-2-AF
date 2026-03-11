@@ -1,0 +1,396 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local hrp = nil
+
+-- Farm variables
+local speed = 20
+local farmEnabled = false
+local farmLoop = nil
+local collected = {}
+
+-- Stealth variables
+local stealthEnabled = false
+local stealthConn = nil
+local noclipConn = nil
+
+-- ESP tables
+local highlights = {}
+local nameLabels = {}  -- now stores distance label too
+
+-- Update HRP
+local function updateHRP()
+    if player.Character then
+        hrp = player.Character:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+player.CharacterAdded:Connect(function(char)
+    collected = {}
+    task.wait(1)
+    updateHRP()
+    if stealthEnabled then
+        task.wait(0.5)
+        toggleStealth(true)
+    end
+end)
+updateHRP()
+
+-- Nearest coin finder (unchanged)
+local function getNearestCoin()
+    if not hrp then return nil end
+    local pos = hrp.Position
+    local best, dist = nil, 9e9
+    for _, map in Workspace:GetChildren() do
+        local folder = map:FindFirstChild("CoinContainer")
+        if folder then
+            for _, coin in folder:GetChildren() do
+                if coin.Name == "Coin_Server" and coin:FindFirstChild("CoinVisual") and not collected[coin] then
+                    local d = (pos - coin.Position).Magnitude
+                    if d < dist and d > 5 then
+                        dist = d
+                        best = coin
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- Shared noclip (merged)
+local function toggleNoclip(on)
+    if noclipConn then noclipConn:Disconnect() end
+    if on and hrp then
+        noclipConn = RunService.Stepped:Connect(function()
+            if player.Character then
+                for _, part in player.Character:GetDescendants() do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end
+end
+
+-- Farm loop (unchanged)
+local function startFarming()
+    while farmEnabled do
+        if not hrp or not player.Character or player.Character:FindFirstChild("Humanoid").Health <= 0 then
+            task.wait(0.8)
+            continue
+        end
+        local coin = getNearestCoin()
+        if coin then
+            collected[coin] = true
+            local goal = CFrame.new(coin.Position + Vector3.new(0, 3, 0))
+            local time = math.max((hrp.Position - coin.Position).Magnitude / speed, 0.03)
+            local tween = TweenService:Create(hrp, TweenInfo.new(time, Enum.EasingStyle.Linear), {CFrame = goal})
+            tween:Play()
+            tween.Completed:Wait()
+        else
+            task.wait(0.08)
+        end
+    end
+end
+
+-- Stealth mode (unchanged)
+local function toggleStealth(on)
+    if stealthConn then stealthConn:Disconnect() end
+    toggleNoclip(on)
+    
+    if on then
+        stealthConn = RunService.Heartbeat:Connect(function()
+            if player.Character then
+                local humanoid = player.Character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.WalkSpeed = 20
+                end
+            end
+        end)
+        
+        -- Infinite jump
+        local conn = UserInputService.JumpRequest:Connect(function()
+            if stealthEnabled and player.Character and player.Character:FindFirstChild("Humanoid") then
+                player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            end
+        end)
+        player.CharacterRemoving:Connect(function() if conn then conn:Disconnect() end end)
+    end
+end
+
+-- IMPROVED ESP: brighter colors, added live distance, better visibility
+local function createESP(plr)
+    if plr == player then return end
+    
+    local function onCharAdded(char)
+        task.wait(0.4)
+        
+        -- Highlight - brighter & stronger outline
+        local h = Instance.new("Highlight")
+        h.Adornee = char
+        h.FillTransparency = 0.4
+        h.OutlineTransparency = 0
+        h.OutlineColor = Color3.new(1, 1, 1)  -- white outline for pop
+        h.FillColor = Color3.fromRGB(255, 255, 255)  -- default white, updated later
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Parent = char
+        highlights[plr] = h
+        
+        -- Name + Distance ESP
+        local head = char:WaitForChild("Head", 5)
+        if not head then return end
+        local bb = Instance.new("BillboardGui")
+        bb.Adornee = head
+        bb.Size = UDim2.new(0, 240, 0, 70)
+        bb.StudsOffset = Vector3.new(0, 3.5, 0)
+        bb.AlwaysOnTop = true
+        bb.Parent = head
+        
+        local nameText = Instance.new("TextLabel")
+        nameText.Size = UDim2.new(1, 0, 0.55, 0)
+        nameText.BackgroundTransparency = 1
+        nameText.Text = plr.Name
+        nameText.TextColor3 = Color3.new(1, 1, 1)
+        nameText.Font = Enum.Font.ArialBold
+        nameText.TextSize = 18
+        nameText.TextStrokeTransparency = 0
+        nameText.TextStrokeColor3 = Color3.new(0, 0, 0)
+        nameText.Parent = bb
+        
+        local distText = Instance.new("TextLabel")
+        distText.Size = UDim2.new(1, 0, 0.45, 0)
+        distText.Position = UDim2.new(0, 0, 0.55, 0)
+        distText.BackgroundTransparency = 1
+        distText.Text = "0 studs"
+        distText.TextColor3 = Color3.fromRGB(220, 220, 220)
+        distText.Font = Enum.Font.Arial
+        distText.TextSize = 15
+        distText.TextStrokeTransparency = 0.5
+        distText.TextStrokeColor3 = Color3.new(0, 0, 0)
+        distText.Parent = bb
+        
+        nameLabels[plr] = {distLabel = distText}
+    end
+    
+    if plr.Character then onCharAdded(plr.Character) end
+    plr.CharacterAdded:Connect(onCharAdded)
+end
+
+-- Live distance update
+RunService.Heartbeat:Connect(function()
+    if not hrp then return end
+    for plr, data in pairs(nameLabels) do
+        if data.distLabel and plr.Character and plr.Character:FindFirstChild("Head") then
+            local dist = math.floor((hrp.Position - plr.Character.Head.Position).Magnitude + 0.5)
+            data.distLabel.Text = tostring(dist) .. " studs"
+        end
+    end
+end)
+
+-- Role colors (brighter versions)
+local espConn
+local function updateRoleColors()
+    if espConn then espConn:Disconnect() end
+    espConn = RunService.RenderStepped:Connect(function()
+        for plr, h in pairs(highlights) do
+            if h and h.Parent and plr.Character then
+                local char = plr.Character
+                local backpack = char:FindFirstChild("Backpack")
+                local knife = backpack and backpack:FindFirstChild("Knife")
+                local gun = backpack and backpack:FindFirstChild("Gun")
+                local star = char:FindFirstChild("Head") and char.Head:FindFirstChild("SheriffStar")
+                if knife then
+                    h.FillColor = Color3.fromRGB(255, 50, 50)    -- brighter red
+                elseif gun or star then
+                    h.FillColor = Color3.fromRGB(80, 160, 255)   -- brighter blue
+                else
+                    h.FillColor = Color3.fromRGB(80, 255, 100)   -- brighter green
+                end
+            end
+        end
+    end)
+end
+
+-- Init ESP
+for _, p in Players:GetPlayers() do
+    createESP(p)
+end
+Players.PlayerAdded:Connect(createESP)
+updateRoleColors()
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--                   UI (with Minimize)
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.ResetOnSpawn = false
+screenGui.Parent = CoreGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 260, 0, 240)
+frame.Position = UDim2.new(0.5, -130, 0.4, -120)
+frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+frame.BorderSizePixel = 1
+frame.BorderColor3 = Color3.fromRGB(80, 80, 80)
+frame.Parent = screenGui
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 30)
+title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+title.BorderSizePixel = 0
+title.Text = "MM2 Script"  -- changed as requested
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Font = Enum.Font.ArialBold
+title.TextSize = 18
+title.Parent = frame
+
+-- Minimize button
+local minButton = Instance.new("TextButton")
+minButton.Size = UDim2.new(0, 28, 0, 28)
+minButton.Position = UDim2.new(1, -32, 0, 1)
+minButton.BackgroundTransparency = 0.8
+minButton.Text = "–"
+minButton.TextColor3 = Color3.new(1,1,1)
+minButton.Font = Enum.Font.ArialBold
+minButton.TextSize = 24
+minButton.Parent = title
+
+-- Minimized square (green background + white text)
+local miniSquare = Instance.new("Frame")
+miniSquare.Size = UDim2.new(0, 60, 0, 60)
+miniSquare.Position = UDim2.new(0.02, 10, 0.5, -30)
+miniSquare.BackgroundColor3 = Color3.fromRGB(0, 180, 60)  -- green
+miniSquare.BorderSizePixel = 2
+miniSquare.BorderColor3 = Color3.new(1,1,1)
+miniSquare.Visible = false
+miniSquare.Parent = screenGui
+
+local miniText = Instance.new("TextLabel")
+miniText.Size = UDim2.new(1,0,1,0)
+miniText.BackgroundTransparency = 1
+miniText.Text = "MM2"
+miniText.TextColor3 = Color3.new(1,1,1)
+miniText.Font = Enum.Font.ArialBold
+miniText.TextSize = 20
+miniText.Parent = miniSquare
+
+-- Dragging
+local dragging = false
+local dragStart, startPos
+title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+
+-- Minimize logic
+minButton.MouseButton1Click:Connect(function()
+    frame.Visible = false
+    miniSquare.Visible = true
+end)
+
+miniSquare.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        frame.Visible = true
+        miniSquare.Visible = false
+    end
+end)
+
+-- Speed label & box (unchanged)
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(0, 60, 0, 25)
+speedLabel.Position = UDim2.new(0, 15, 0, 40)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Speed:"
+speedLabel.TextColor3 = Color3.new(1, 1, 1)
+speedLabel.Font = Enum.Font.Arial
+speedLabel.TextSize = 16
+speedLabel.Parent = frame
+
+local speedBox = Instance.new("TextBox")
+speedBox.Size = UDim2.new(0, 70, 0, 25)
+speedBox.Position = UDim2.new(0, 80, 0, 40)
+speedBox.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+speedBox.BorderColor3 = Color3.fromRGB(90, 90, 90)
+speedBox.Text = "20"
+speedBox.TextColor3 = Color3.new(1, 1, 1)
+speedBox.Font = Enum.Font.Arial
+speedBox.TextSize = 16
+speedBox.Parent = frame
+
+speedBox.FocusLost:Connect(function()
+    local num = tonumber(speedBox.Text)
+    if num and num >= 1 and num <= 25 then
+        speed = num
+    else
+        speedBox.Text = tostring(speed)
+    end
+end)
+
+-- Farm toggle (unchanged)
+local farmButton = Instance.new("TextButton")
+farmButton.Size = UDim2.new(0, 200, 0, 40)
+farmButton.Position = UDim2.new(0, 20, 0, 75)
+farmButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+farmButton.BorderColor3 = Color3.fromRGB(100, 0, 0)
+farmButton.Text = "FARM OFF"
+farmButton.TextColor3 = Color3.new(1, 1, 1)
+farmButton.Font = Enum.Font.ArialBold
+farmButton.TextSize = 20
+farmButton.Parent = frame
+
+farmButton.MouseButton1Click:Connect(function()
+    farmEnabled = not farmEnabled
+    toggleNoclip(farmEnabled)
+    if farmEnabled then
+        farmButton.Text = "FARM ON"
+        farmButton.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
+        farmButton.BorderColor3 = Color3.fromRGB(0, 100, 0)
+        farmLoop = task.spawn(startFarming)
+    else
+        farmButton.Text = "FARM OFF"
+        farmButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+        farmButton.BorderColor3 = Color3.fromRGB(100, 0, 0)
+        if farmLoop then task.cancel(farmLoop) end
+    end
+end)
+
+-- Stealth toggle (unchanged)
+local stealthButton = Instance.new("TextButton")
+stealthButton.Size = UDim2.new(0, 200, 0, 40)
+stealthButton.Position = UDim2.new(0, 20, 0, 125)
+stealthButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+stealthButton.BorderColor3 = Color3.fromRGB(100, 0, 0)
+stealthButton.Text = "STEALTH OFF"
+stealthButton.TextColor3 = Color3.new(1, 1, 1)
+stealthButton.Font = Enum.Font.ArialBold
+stealthButton.TextSize = 20
+stealthButton.Parent = frame
+
+stealthButton.MouseButton1Click:Connect(function()
+    stealthEnabled = not stealthEnabled
+    toggleStealth(stealthEnabled)
+    stealthButton.Text = stealthEnabled and "STEALTH ON" or "STEALTH OFF"
+    stealthButton.BackgroundColor3 = stealthEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    stealthButton.BorderColor3 = stealthEnabled and Color3.fromRGB(0, 100, 0) or Color3.fromRGB(100, 0, 0)
+end)
